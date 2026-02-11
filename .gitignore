@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+
+# Environments
+.env
+.env.local
+.env.*.local
+
+# Database
+*.sqlite3
+*.db
+data/trading_data.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Project Specific
+# We keep the "models/" directory in git if they are small reference models, 
+# but usually it's better to ignore if they get large. 
+# For this sprint, we'll keep them to verify functionality on clone.
+# models/ 
+
+# Logs
+logs/
+*.log
+
+# Windows
+Thumbs.db

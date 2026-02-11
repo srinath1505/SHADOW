@@ -1,0 +1,11 @@
+MetaTrader5
+pandas
+pandas_ta
+numpy
+python-dotenv
+ta-lib
+hmmlearn
+xgboost
+torch
+scikit-learn
+pytz
