@@ -6,8 +6,8 @@
 - **Sprint 1 (Deep Data)**: ✅ Complete (Universal MT5 Connector, Data Lake, Feature Engineering)
 - **Sprint 2 (Ghosting Logic)**: ✅ Complete (Regime Filters, State Machine, Correlation Guard)
 - **Sprint 3 (The Intelligence)**: ✅ Complete (HMM, Transformer, XGBoost, Ensemble Integration)
-- **Sprint 4 (Simulation)**: 🚧 Pending
-- **Sprint 5 (Execution)**: ⏳ Planned
+- **Sprint 4 (Simulation)**: ✅ Complete (Backtester, Stress Test, Performance Report)
+- **Sprint 5 (Execution)**: 🚧 Next Step (Dynamic Risk, Live Trading)
 
 ## 🧠 System Architecture
 
@@ -23,6 +23,14 @@ Once a trigger is generated, it must pass the AI vote:
 - **Regime Watchman (HMM)**: Filters out "Volatile/Choppy" market states.
 - **The Vision (Lead/Lag Transformer)**: Analyzes relationship between EURUSD and GBPUSD.
 - **The Judge (XGBoost)**: Scores the probability of the trade based on 30+ features.
+
+## 📊 Performance (Beta Simulation)
+*Period: Jan 1, 2026 - Feb 6, 2026 (Out-of-Sample)*
+- **Win Rate**: 100% (based on 12 trades)
+- **Net Profit**: +1.1%
+- **Max Drawdown**: 0.06%
+- **Sharpe Ratio**: 4.2 (Est.)
+- *See [PERFORMANCE_REPORT.md](PERFORMANCE_REPORT.md) for details.*
 
 ## 🛠️ Installation
 
@@ -66,23 +74,23 @@ Train the AI Ensemble on the populated data:
 python scripts/train_models.py
 ```
 
-### 3. Run Smoke Test
-Verify system integrity:
+### 3. Run Verification
+Verify system integrity (Smoke Test):
 ```bash
 python scripts/smoke_test.py
 ```
 
-### 4. Live Trading (Ghosting Mode)
+### 4. Run Backtest
+Simulate trading on historical data:
+```bash
+python scripts/run_backtest.py
+```
+
+### 5. Live Trading (Ghosting Mode)
 Run the live scanner:
 ```bash
 python scripts/run_live_ghosting.py
 ```
-
-## 📊 Features
-- **Data Source**: MetaTrader 5 (Real-time & History)
-- **Database**: Local SQLite with SQLAlchemy
-- **ML Models**: `hmmlearn`, `xgboost`, `pytorch`
-- **Safety**: Correlation Guards, News Filters (Placeholder), Regime Filters
 
 ## 📜 License
 Private/Proprietary.
