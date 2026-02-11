@@ -12,6 +12,7 @@ from src.features.features import FeatureEngineer
 from src.strategies.correlation_guard import CorrelationGuard
 from src.strategies.ghosting_engine import SignalStateMachine, GhostState
 from src.core.ensemble import AntigravityEnsemble
+from src.core.backtester import Backtester
 
 def print_result(test_name, status, message=""):
     icon = "[PASS]" if status else "[FAIL]"
@@ -167,6 +168,43 @@ def smoke_test():
     except Exception as e:
         all_passed = False
         print_result("AI Verification", False, f"Exception: {e}")
+
+    # --- 6. Backtester (Sprint 4) ---
+    print("\n[6. Backtester (Simulation)]")
+    try:
+        # Create a tiny dataframe for backtest verification
+        dates = pd.date_range(start='2026-01-01', periods=500, freq='1min')
+        data = {
+            'time': dates,
+            'open': [1.1]*500,
+            'high': [1.11]*500,
+            'low': [1.09]*500,
+            'close': [1.105]*500,
+            'tick_volume': [100]*500,
+            'spread': [1]*500,
+            'real_volume': [100]*500,
+            'RSI_14': [50.0]*500,
+            'ADX_14': [25.0]*500,
+            'ATR_14': [0.001]*500,
+            'volatility_ratio': [1.0]*500,
+            'z_score_20': [0.5]*500,
+            'hour': [12]*500,
+            'log_ret': [0.0]*500
+        }
+        df_bt = pd.DataFrame(data)
+        
+        # Instantiate Backtester
+        bt = Backtester(ensemble=ensemble)
+        
+        # Run on dummy data
+        t, e = bt.run(df_bt)
+        
+        # Check if it ran without error (even if 0 trades)
+        print_result("Backtester Execution", True, f"Processed {len(df_bt)} candles, Equity: ${bt.equity:.2f}")
+        
+    except Exception as e:
+        all_passed = False
+        print_result("Backtester Error", False, f"Exception: {e}")
 
     connector.shutdown()
     
