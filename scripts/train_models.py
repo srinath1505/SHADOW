@@ -15,6 +15,7 @@ sys.path.append(str(PROJECT_ROOT))
 
 from src.core.hmm_model import RegimeHMM
 from src.core.xgboost_model import TradeJudgeXGB
+from src.core.transformer_model import TransformerPredictor
 from src.features.features import FeatureEngineer
 from data.infrastructure.database import DatabaseManager
 from src.strategies.ghosting_engine import SignalStateMachine, GhostState
@@ -92,7 +93,9 @@ def generate_signals_and_labels(df: pd.DataFrame, hmm_model):
     
     generated_count = 0
     
-    for i in range(len(df) - 100): # Stop before end to have future data for labeling
+    from tqdm import tqdm
+    print("Generating Signals...")
+    for i in tqdm(range(len(df) - 100)): # Stop before end to have future data for labeling
         row = df.iloc[i]
         price = row['close']
         vwap = row['VWAP']
@@ -204,6 +207,41 @@ def train_xgboost(signals_df: pd.DataFrame):
         logging.error(f"XGBoost Training Failed: {e}")
         return None
 
+def train_transformer_model(df_eur: pd.DataFrame, df_gbp: pd.DataFrame):
+    """
+    Trains the Lead/Lag Transformer.
+    """
+    logging.info("Training Transformer (Lead/Lag Vision)...")
+    
+    # Sync Data
+    # Inner join on time
+    df = pd.merge(df_eur[['time', 'log_ret']], df_gbp[['time', 'log_ret']], on='time', suffixes=('_eur', '_gbp'))
+    df = df.sort_values('time').reset_index(drop=True)
+    
+    logging.info(f"Merged Data Length: {len(df)}")
+    if not df.empty:
+        logging.info(f"Sample Data:\n{df.head()}")
+    
+    if df.empty:
+        logging.error("No overlapping data for EUR/GBP!")
+        return None
+        
+    # LIMIT DATA FOR SPEED (CPU Constraints) (Sprint 4.7)
+    MAX_SAMPLES = 2000 
+    if len(df) > MAX_SAMPLES:
+        df = df.iloc[-MAX_SAMPLES:]
+        logging.info(f"Subsampled to last {MAX_SAMPLES} rows for speed.")
+        
+    predictor = TransformerPredictor()
+    try:
+        predictor.train(df['log_ret_eur'], df['log_ret_gbp'], epochs=2)
+        predictor.save_model(MODELS_DIR / "tft_model.pth")
+        logging.info("Transformer Model Saved.")
+        return predictor
+    except Exception as e:
+        logging.error(f"Transformer Training Failed: {e}")
+        return None
+
 def main():
     db = DatabaseManager()
     
@@ -216,18 +254,48 @@ def main():
         logging.error("No data found in database. Run populate_db.py first.")
         return
 
+    # 1.5 Strict Date Filter for Robust Training (Sprint 4.5)
+    # Train: Feb 2025 to Sep 2025
+    TRAIN_START = "2025-02-01"
+    TRAIN_END = "2025-09-30"
+    
+    logging.info(f"Filtering Training Data: {TRAIN_START} to {TRAIN_END}")
+    df = df[(df['time'] >= TRAIN_START) & (df['time'] <= TRAIN_END)].reset_index(drop=True)
+    
+    if df.empty:
+        logging.error(f"No data in training range {TRAIN_START}-{TRAIN_END}")
+        return
+    
+    logging.info(f"Training samples: {len(df)}")
+
     # 2. Train HMM
-    hmm_model = train_hmm(df)
+    # hmm_model = train_hmm(df)
     
     # 3. Generate Labels for XGBoost
-    signals_df = generate_signals_and_labels(df, hmm_model)
+    # signals_df = generate_signals_and_labels(df, hmm_model)
     
     # 4. Train XGBoost
-    train_xgboost(signals_df)
+    # train_xgboost(signals_df)
     
-    # 5. Transformer (Mock or Simple)
-    # For now, just save a placeholder if we need file existence
-    # But let's skip to keep it clean. 
+    # 4. Train XGBoost (Duplicate removed)
+    # train_xgboost(signals_df)
+    
+    # 5. Train Transformer (Sprint 4.7)
+    logging.info("--- Training Transformer ---")
+    symbol_sec = "GBPUSD"
+    logging.info(f"Loading data for {symbol_sec}...")
+    df_gbp = db.load_candles(symbol_sec)
+    
+    if not df_gbp.empty:
+        # Filter (Reuse same range)
+        df_gbp = df_gbp[(df_gbp['time'] >= TRAIN_START) & (df_gbp['time'] <= TRAIN_END)].reset_index(drop=True)
+        if not df_gbp.empty:
+             train_transformer_model(df, df_gbp)
+        else:
+             logging.warning("GBPUSD data empty after filtering.")
+    else:
+        logging.warning("GBPUSD data not found.")
+        
     logging.info("Training Pipeline Completed.")
 
 if __name__ == "__main__":

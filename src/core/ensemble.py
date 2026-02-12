@@ -37,6 +37,12 @@ class AntigravityEnsemble:
         
         # Flags to check if models differ loaded
         self.ready = False 
+        
+        # Dynamic Configuration for Optimization (Sprint 4.6)
+        self.active_config = {
+            'xgb_threshold': 0.65, # Default Conservative
+            'allow_volatile': False # Default Conservative
+        }
 
     def load_models(self):
         """
@@ -44,7 +50,7 @@ class AntigravityEnsemble:
         """
         try:
             self.hmm.load_model(self.models_dir / "hmm_model.pkl")
-            # self.transformer.load_model(self.models_dir / "tft_model.pth") # Transformer skipped for now
+            self.transformer.load_model(self.models_dir / "tft_model.pth") 
             self.judge.load_model(self.models_dir / "xgb_model.json")
             self.ready = True
             print("Models loaded successfully.")
@@ -52,10 +58,11 @@ class AntigravityEnsemble:
             print(f"Failed to load models: {e}")
             self.ready = False
 
-    def check_signal(self, candle_data: pd.DataFrame, signal_context: dict) -> EnsembleSignal:
+    def check_signal(self, candle_data: pd.DataFrame, signal_context: dict, secondary_candle_data: pd.DataFrame = None) -> EnsembleSignal:
         """
         Evaluates a signal candidate.
         :param candle_data: DataFrame with features.
+        :param check_signal: DataFrame of secondary pair (GBPUSD).
         :param signal_context: Dict with 'pair', 'action', 'timestamp', 'signal_id'.
         """
         # 1. HMM Judgment
@@ -69,13 +76,17 @@ class AntigravityEnsemble:
             hmm_state = 0 # Calm
             hmm_conf = 0.85 # Mock
 
-        # 2. Transformer Judgment
-        # Inputs need to be tensor of recent returns (EUR & GBP).
-        # We need secondary pair data here. For now, using placeholder logic 
-        # or assuming candle_data contains both? 
-        # Design choice: candle_data might be just primary.
-        # For prototype, we mock the score or assume data is prepared.
-        trans_score = 0.6 # Mock (GBP leading?)
+        # 2. Transformer Judgment (Sprint 4.7)
+        trans_score = 0.5 # Neutral
+        
+        if secondary_candle_data is not None and len(secondary_candle_data) >= 60:
+             # Compute Log Returns on the fly
+             # We assume data is sorted and continuous
+             eur = np.log(candle_data['close'] / candle_data['close'].shift(1)).fillna(0).values
+             gbp = np.log(secondary_candle_data['close'] / secondary_candle_data['close'].shift(1)).fillna(0).values
+             
+             # Predict
+             trans_score = self.transformer.predict(eur, gbp)
 
         # 3. XGBoost Judgment
         # Feature Vector: Features + HMM + Trans
@@ -106,15 +117,23 @@ class AntigravityEnsemble:
             xgb_prob = 0.72 # Mock
 
         # 4. Final Decision Rule
-        # HMM: Reject if State == 2 (Volatile)
-        # Trans: Boost if Score > 0.7?
-        # XGB: > 0.65 to Approve.
+        # Dynamic Thresholds (Sprint 4.6)
+        xgb_threshold = self.active_config.get('xgb_threshold', 0.65)
+        allow_volatile = self.active_config.get('allow_volatile', False)
         
         status = "APPROVED"
+        action = signal_context.get('action', 'CHECK')
         
-        if hmm_state == 2: # Volatile
+        # Vision Filter (Sprint 4.7)
+        # 0.55 / 0.45 Buffers
+        if action == "BUY" and trans_score < 0.45:
+             status = "REJECTED_VISION"
+        elif action == "SELL" and trans_score > 0.55:
+             status = "REJECTED_VISION"
+        
+        if hmm_state == 2 and not allow_volatile: # Volatile
             status = "REJECTED_REGIME"
-        elif xgb_prob < 0.65:
+        elif xgb_prob < xgb_threshold:
             status = "REJECTED_SCORE"
 
         return EnsembleSignal(

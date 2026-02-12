@@ -52,23 +52,92 @@ class TransformerPredictor:
         if model_path:
             self.load_model(model_path)
             
-    def train(self, eur_series, gbp_series, targets, epochs=10):
+    def train(self, eur_series, gbp_series, epochs=20, batch_size=32, seq_len=60, lr=0.001):
         """
-        Skeleton for training loop.
+        Trains the Transformer to predict EURUSD direction based on EUR+GBP history.
         """
-        pass
-
-    def predict(self, eur_series, gbp_series):
+        # 1. Prepare Data
+        # Ensure lengths match
+        min_len = min(len(eur_series), len(gbp_series))
+        eur = eur_series[:min_len].values.astype(np.float32)
+        gbp = gbp_series[:min_len].values.astype(np.float32)
+        
+        # Create Targets (1 if Next EUR Close > Current, else 0)
+        # We need raw close prices for targets? input is series.
+        # Assuming series are Log Returns or Prices? 
+        # Best practice: Inputs = Log Returns. Target = Sign of next return.
+        
+        # Let's assume inputs are Log Returns.
+        # y[t] = 1 if eur[t+1] > 0 else 0
+        targets = (eur[1:] > 0).astype(np.float32)
+        
+        # Truncate inputs to match targets
+        eur = eur[:-1]
+        gbp = gbp[:-1]
+        
+        # Create Sequences
+        X = []
+        y = []
+        for i in range(len(eur) - seq_len):
+            _eur = eur[i:i+seq_len]
+            _gbp = gbp[i:i+seq_len]
+            _x = np.stack([_eur, _gbp], axis=1) # (Seq, 2)
+            _y = targets[i+seq_len] # Target for the step AFTER the sequence
+            X.append(_x)
+            y.append(_y)
+            
+        X = np.array(X)
+        y = np.array(y)
+        
+        # Tensorize
+        dataset = torch.utils.data.TensorDataset(
+            torch.tensor(X), 
+            torch.tensor(y).unsqueeze(1)
+        )
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        
+        # 2. Setup Loop
+        criterion = nn.BCELoss()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        self.model.train()
+        
+        print(f"Training Transformer on {len(dataset)} sequences for {epochs} epochs...")
+        print(f"DataLoader has {len(dataloader)} batches.")
+        
+        for epoch in range(epochs):
+            print(f"Starting Epoch {epoch+1}/{epochs}...")
+            total_loss = 0
+            batch_count = 0
+            for batch_x, batch_y in dataloader:
+                optimizer.zero_grad()
+                outputs = self.model(batch_x) 
+                loss = criterion(outputs, batch_y)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+                batch_count += 1
+                if batch_count % 10 == 0:
+                     print(f"  Processed batch {batch_count}/{len(dataloader)}")
+            
+            print(f"Epoch {epoch+1}/{epochs} Completed, Loss: {total_loss/len(dataloader):.4f}")
+    
+    def predict(self, eur_seq, gbp_seq):
         """
-        Predicts lead/lag score.
-        :param eur_series: List or array of EUR returns.
-        :param gbp_series: List or array of GBP returns.
-        :return: Score (0.0 to 1.0). > 0.5 implies GBP leads EUR (EUR lags)?
+        Predicts next candle probability. 
+        Input: Sequence of last N returns (List or Array).
         """
-        # Prepare input
-        # Combine series
-        data = np.stack([eur_series, gbp_series], axis=1) # (Seq, 2)
-        tensor_x = torch.tensor(data, dtype=torch.float32).unsqueeze(0) # (1, Seq, 2)
+        # Ensure input is length 60
+        seq_len = 60
+        if len(eur_seq) < seq_len or len(gbp_seq) < seq_len:
+             # Pad or return neutral 0.5
+             return 0.5
+             
+        # Take last 60
+        e = eur_seq[-seq_len:]
+        g = gbp_seq[-seq_len:]
+        
+        data = np.stack([e, g], axis=1) # (60, 2)
+        tensor_x = torch.tensor(data, dtype=torch.float32).unsqueeze(0) # (1, 60, 2)
         
         self.model.eval()
         with torch.no_grad():

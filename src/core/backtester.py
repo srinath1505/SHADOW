@@ -30,6 +30,14 @@ class Backtester:
         # Metrics
         self.max_drawdown = 0.0
         self.peak_equity = initial_capital
+        
+        # Sprint 4.5 Risk Rules
+        self.daily_risk_limit_pct = 0.025 # 2.5% max daily loss
+        self.weekly_profit_cap_pct = 0.21 # 21% max weekly profit
+        self.global_hard_stop_pct = 0.05 # 5% max global loss
+        
+        self.trading_enabled = True
+        self.global_stop_hit = False
 
     def _calculate_profit(self, entry_price, exit_price, direction, size):
         """
@@ -55,17 +63,29 @@ class Backtester:
         return slip
 
 
-    def run(self, df: pd.DataFrame, start_date=None, end_date=None):
+    def run(self, df: pd.DataFrame, secondary_df: pd.DataFrame = None, start_date=None, end_date=None):
         """
         Runs the backtest.
         """
         # Filter Data
         if start_date:
             df = df[df['time'] >= pd.to_datetime(start_date)]
+            if secondary_df is not None:
+                secondary_df = secondary_df[secondary_df['time'] >= pd.to_datetime(start_date)]
         if end_date:
             df = df[df['time'] <= pd.to_datetime(end_date)]
+            if secondary_df is not None:
+                secondary_df = secondary_df[secondary_df['time'] <= pd.to_datetime(end_date)]
         
         df = df.reset_index(drop=True)
+        if secondary_df is not None:
+            secondary_df = secondary_df.reset_index(drop=True)
+            # Ensure synchronization? 
+            # Simple assumption: indices align or we rely on time lookups?
+            # Time lookup is safer but slow.
+            # Fast backtest: Reindex secondary to primary time.
+            secondary_df = secondary_df.set_index('time').reindex(df['time']).reset_index()
+            
         logging.info(f"Backtesting on {len(df)} candles...")
         
         # Pre-calculate Std Dev for Ghosting if missing
@@ -89,7 +109,60 @@ class Backtester:
             # Engine Update
             new_state = sm.update(current_price, vwap, std_dev, i)
             
-            # 1. Manage Open Positions (TP/SL)
+            # --- RISK MANAGEMENT CHECKS (Sprint 4.5) ---
+            if not getattr(self, 'day_start_balance', None) or current_time.date() != self.current_day:
+                self.current_day = current_time.date()
+                self.day_start_balance = self.balance
+                self.daily_trading_allowed = True
+                
+            if not getattr(self, 'week_start_balance', None) or current_time.isocalendar()[1] != self.current_week:
+                self.current_week = current_time.isocalendar()[1]
+                self.week_start_balance = self.balance
+                self.weekly_trading_allowed = True
+
+            # 1. Global Hard Stop (5% of Initial)
+            if self.equity < (self.initial_capital * (1 - self.global_hard_stop_pct)):
+                self.trading_enabled = False
+                self.global_stop_hit = True
+                # Close all positions immediately (simulated below)
+                
+            # 2. Daily Loss Limit (2.5% of Day Start)
+            daily_pnl = self.equity - self.day_start_balance
+            daily_loss_limit = -(self.day_start_balance * self.daily_risk_limit_pct)
+            
+            if daily_pnl < daily_loss_limit:
+                 self.daily_trading_allowed = False
+            
+            # 3. Weekly Profit Cap (21%)
+            weekly_pnl_pct = (self.equity - self.week_start_balance) / self.week_start_balance
+            if weekly_pnl_pct >= self.weekly_profit_cap_pct:
+                 self.weekly_trading_allowed = False
+                 
+            # Force Close if global stop
+            if self.global_stop_hit and self.positions:
+                logging.warning(f"GLOBAL STOP HIT! Closing {len(self.positions)} positions.")
+                for pos in list(self.positions): # Copy logic
+                    exit_price = current_price
+                    # Slippage on panic close?
+                    if pos['type'] == 'BUY':
+                        exit_price -= self._apply_slippage(exit_price)
+                    else:
+                        exit_price += self._apply_slippage(exit_price)
+                        
+                    gross_pnl = self._calculate_profit(pos['entry_price'], exit_price, pos['type'], pos['size'])
+                    comm = self.commission_per_lot * pos['size']
+                    net_pnl = gross_pnl - comm
+                    
+                    self.balance += net_pnl
+                    pos['exit_price'] = exit_price
+                    pos['exit_time'] = current_time
+                    pos['pnl'] = net_pnl
+                    pos['reason'] = 'GLOBAL_STOP'
+                    
+                    self.trades.append(pos)
+                    self.positions.remove(pos)
+
+            # 1. Manage Open Positions (Regular TP/SL)
             high = row['high']
             low = row['low']
             
@@ -100,10 +173,6 @@ class Backtester:
                 sl_hit = False
                 tp_hit = False
                 exit_price = 0
-                
-                # Check for gap opening beyond SL/TP? 
-                # For M1, we assume logic executes within candle range or at Open if gap.
-                # Simplified: Check High/Low against thresholds.
                 
                 if pos['type'] == 'BUY':
                     if low <= pos['sl']:
@@ -137,26 +206,33 @@ class Backtester:
             
             for p in positions_to_close:
                 self.positions.remove(p)
-                
-            # 2. Check Signals (Only if flat)
-            if not self.positions:
+            
+            # 2. Check Signals (Only if flat AND Risk Rules allow)
+            if not self.positions and self.trading_enabled and self.daily_trading_allowed and self.weekly_trading_allowed:
                 # Check for Trigger from Ghosting Engine
                 if new_state.name == "TRIGGER_CANDIDATE":
                     # We have a candidate! Ask the Ensemble.
                     
+                    trade_type = "SELL" if current_price > vwap else "BUY"
+
                     # Context for Ensemble
                     ctx = {
                         'timestamp': str(current_time),
                         'signal_id': f"BT-{i}",
                         'pair': "EURUSD",
-                        'action': "CHECK"
+                        'action': trade_type
                     }
                     
                     # Ensemble needs data up to this point.
                     # Optimization: Pass a window.
                     window = df.iloc[i-100:i+1]
                     
-                    signal_result = self.ensemble.check_signal(window, ctx)
+                    secondary_window = None
+                    if secondary_df is not None:
+                        # secondary_df is reindexed to df, so we can use same indices
+                        secondary_window = secondary_df.iloc[i-100:i+1]
+
+                    signal_result = self.ensemble.check_signal(window, ctx, secondary_candle_data=secondary_window)
                     
                     if signal_result.final_status == "APPROVED":
                         # Execute Trade!
@@ -165,7 +241,7 @@ class Backtester:
                         # Ghosting is Mean Reversion.
                         # If Price > VWAP -> SELL
                         # If Price < VWAP -> BUY
-                        trade_type = "SELL" if current_price > vwap else "BUY"
+                        # trade_type already calculated above
                         
                         # Entry Price (Close of trigger candle)
                         entry_price = current_price
